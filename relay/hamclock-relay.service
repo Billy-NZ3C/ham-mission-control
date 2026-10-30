@@ -1,0 +1,12 @@
+[Unit]
+Description=Ham Mission Control relay (feeds the ham clock)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/hamclock/relay/clock_relay.py
+WorkingDirectory=%h/hamclock/relay
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

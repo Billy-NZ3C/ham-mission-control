@@ -1,0 +1,1186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ham Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<style>
+:root {
+  --ink: #f4f4f4; --dim: #9aa3ad; --faint: #5c636b; --amber: #ffb627; --amber-glow: rgba(255,182,39,.55);
+  --cyan: #3ee6ff; --lime: #c4f542; --phos: #3dff9e; --bad: #ff5a5a; --good: #4ade80;
+  --line: rgba(120,200,255,.16); --glass: rgba(3,8,14,.55);
+  --mono: 'JetBrains Mono', ui-monospace, monospace; --sans: 'Space Grotesk', system-ui, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; background: #000; color: var(--ink); overflow: hidden; font-family: var(--sans); }
+/* Designed at 1920x1080 (24" 1080p TV), scaled to fit any screen */
+#stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden;
+  background: radial-gradient(ellipse at 33% 52%, #06111f 0%, #020509 55%, #000 100%); }
+#globe { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; display: block; }
+#labels { position: absolute; inset: 0; pointer-events: none; }
+.gl { position: absolute; font: 700 14px/1 var(--mono); white-space: nowrap; transform: translate(10px, -50%); text-shadow: 0 0 6px #000, 0 0 2px #000; }
+.gl.sat { color: var(--lime); } .gl.iss { color: #fff; font-size: 16px; }
+.gl.home { color: var(--amber); font-size: 18px; font-weight: 800; transform: translate(26px, -50%); }
+#qthMark { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; pointer-events: none; display: none; }
+#qthMark::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2.5px solid var(--amber);
+  box-shadow: 0 0 0 3px rgba(0,0,0,.75), inset 0 0 0 3px rgba(0,0,0,.75), 0 0 14px var(--amber-glow); }
+#qthMark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 3px var(--amber), 0 0 0 5px rgba(0,0,0,.8); }
+#qthMark i { position: absolute; background: var(--amber); box-shadow: 0 0 0 1.5px rgba(0,0,0,.85); }
+#qthMark i.n, #qthMark i.s { left: 50%; width: 2px; height: 9px; margin-left: -1px; } #qthMark i.n { top: -12px; } #qthMark i.s { bottom: -12px; }
+#qthMark i.e, #qthMark i.w { top: 50%; height: 2px; width: 9px; margin-top: -1px; } #qthMark i.e { right: -12px; } #qthMark i.w { left: -12px; }
+.gl.heard { color: var(--amber); font-size: 13px; } .gl.heard span { color: var(--dim); font-weight: 600; }
+
+/* Corner brackets give the mission-control frame */
+.frame { position: absolute; border: 0 solid rgba(120,200,255,.35); width: 34px; height: 34px; }
+.frame.tl { left: 16px; top: 16px; border-left-width: 2px; border-top-width: 2px; }
+.frame.bl { left: 16px; bottom: 16px; border-left-width: 2px; border-bottom-width: 2px; }
+.frame.tr { right: 16px; top: 16px; border-right-width: 2px; border-top-width: 2px; }
+.frame.br { right: 16px; bottom: 16px; border-right-width: 2px; border-bottom-width: 2px; }
+
+/* Top HUD */
+#hud { position: absolute; left: 44px; top: 36px; display: flex; align-items: flex-start; gap: 56px; pointer-events: none; }
+.brand b { font: 800 60px/1 var(--mono); color: var(--amber); text-shadow: 0 0 30px var(--amber-glow); }
+.brand div { font: 600 15px/1 var(--mono); color: var(--dim); margin-top: 10px; letter-spacing: .16em; }
+.brand .mc { color: var(--cyan); letter-spacing: .34em; font-size: 12px; margin-top: 8px; }
+.clock .t { font: 800 66px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.clock .t .s { font-size: 36px; color: var(--dim); font-weight: 600; }
+.clock .l { font: 700 13px/1 var(--mono); letter-spacing: .3em; color: var(--dim); margin-top: 9px; }
+.clock.utc .t { color: var(--amber); text-shadow: 0 0 26px var(--amber-glow); }
+.wxline { font: 600 15px/1.6 var(--mono); color: var(--dim); padding-top: 6px; }
+.wxline b { color: var(--ink); font: 700 22px/1.2 var(--sans); display: block; }
+.wxline .tmp { font: 800 34px/1 var(--mono); color: var(--ink); }
+.wxline .alert { color: var(--bad); display: none; }
+
+/* Bottom-left: passes + space weather */
+#bl { position: absolute; left: 44px; bottom: 74px; display: flex; gap: 18px; align-items: flex-end; }
+.glass { background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 13px 16px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.glass h3 { font: 700 12px/1 var(--mono); letter-spacing: .22em; color: var(--cyan); margin-bottom: 9px; display: flex; justify-content: space-between; gap: 18px; }
+.glass h3 em { font-style: normal; color: var(--faint); letter-spacing: .06em; font-weight: 600; }
+.pass { display: grid; grid-template-columns: 76px 158px 74px 98px; font: 600 16px/1.6 var(--mono); }
+.pass .n { color: var(--lime); font-weight: 800; } .pass .n.iss { color: #fff; }
+.pass .e { color: var(--dim); text-align: right; } .pass .e b { color: var(--ink); }
+.pass .in { color: var(--amber); text-align: right; }
+.pass.up .in, .pass.up .w { color: var(--lime); }
+.sw { display: grid; grid-template-columns: repeat(4, 88px); }
+.sw div { font: 800 30px/1 var(--mono); } .sw span { display: block; font: 700 11px var(--mono); color: var(--dim); letter-spacing: .18em; margin-bottom: 7px; }
+.sw i { display: block; font: 500 11px var(--mono); color: var(--faint); font-style: normal; margin-top: 6px; letter-spacing: 0; }
+
+/* DX cluster ticker along the bottom */
+#ticker { position: absolute; left: 0; width: 1268px; bottom: 0; height: 52px; overflow: hidden; contain: strict;
+  background: linear-gradient(to top, rgba(0,0,0,.85), rgba(0,0,0,0)); }
+#ticker .lbl { position: absolute; left: 0; padding-left: 44px; top: 0; height: 52px; line-height: 52px; font: 700 12px var(--mono); letter-spacing: .22em; color: var(--cyan); background: #000; padding-right: 14px; z-index: 2; }
+#tick { position: absolute; left: 210px; top: 16px; white-space: nowrap; font: 600 20px/1 var(--mono); will-change: transform; }
+#tick span { margin-right: 46px; color: var(--dim); } #tick b { color: var(--cyan); } #tick u { text-decoration: none; color: var(--ink); }
+
+/* Right column: radar + you on the air */
+#right { position: absolute; left: 1268px; top: 0; width: 652px; height: 1080px; padding: 30px 30px 30px 0; display: flex; flex-direction: column; gap: 18px; }
+#scope { position: relative; width: 622px; height: 622px; border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(61,255,158,.35), 0 0 60px rgba(61,255,158,.18), inset 0 0 90px rgba(0,0,0,.9); overflow: hidden; background: #010a05; }
+#radar { width: 622px; height: 622px; display: block; }
+#scope::after { content: ""; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgba(0,0,0,.28) 0 1px, transparent 1px 3px),
+              radial-gradient(circle, transparent 60%, rgba(0,0,0,.55) 100%); }
+.scope-tag { position: absolute; left: 1268px; top: 30px; font: 700 12px var(--mono); letter-spacing: .22em; color: var(--phos); }
+.scope-tag em { display: block; font-style: normal; color: rgba(61,255,158,.55); letter-spacing: .08em; margin-top: 6px; font-weight: 600; }
+#air { flex: 1; position: relative; overflow: hidden; }
+#air .big { display: flex; align-items: baseline; gap: 14px; margin-top: 2px; }
+#air .big b { font: 800 58px/1 var(--mono); color: var(--amber); text-shadow: 0 0 24px var(--amber-glow); }
+#air .big span { font: 700 18px/1.2 var(--sans); color: var(--ink); }
+#air .sub { font: 600 14px var(--mono); color: var(--dim); margin-top: 6px; } #air .sub b { color: var(--ink); }
+#heardList { margin-top: 10px; }
+.hr { display: grid; grid-template-columns: 122px 82px 1fr 104px 64px; font: 600 15px/1.5 var(--mono); color: var(--dim); }
+.hr .c { color: var(--ink); font-weight: 800; } .hr .d { text-align: right; color: var(--ink); } .hr .s { text-align: right; } .hr.new { animation: newrow 4s ease-out; }
+@keyframes newrow { from { background: rgba(255,182,39,.3); } to { background: transparent; } }
+.bands { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; align-items: end; height: 56px; margin-top: 4px; }
+.key { display: flex; gap: 26px; margin-top: 8px; font: 600 12px var(--mono); color: var(--dim); }
+.key span { display: flex; align-items: center; gap: 8px; }
+.key i { display: inline-block; width: 34px; border-radius: 3px; }
+.key i.me { height: 4px; background: #fff4d6; box-shadow: 0 0 0 2px rgba(255,154,31,.55), 0 0 12px #ff9a1f; }
+.key i.them { height: 2px; background: linear-gradient(90deg, #a78bfa, #60a5fa, #34d399, #facc15, #f87171); }
+.bands div { text-align: center; font: 700 11px var(--mono); color: var(--dim); }
+.bands i { display: block; margin: 0 auto 5px; width: 22px; border-radius: 3px 3px 0 0; min-height: 2px; transition: height 1s; }
+.livedot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 10px var(--good); margin-right: 8px; vertical-align: 0; }
+.livedot.off { background: var(--bad); box-shadow: 0 0 10px var(--bad); }
+
+/* "heard by" flash across the globe */
+#flash { position: absolute; left: 0; width: 1268px; top: 470px; text-align: center; pointer-events: none; opacity: 0;
+  font: 800 54px/1 var(--mono); color: var(--amber); text-shadow: 0 0 40px var(--amber-glow), 0 0 8px #000; letter-spacing: .04em; }
+#flash small { display: block; font: 700 20px var(--mono); color: var(--ink); margin-top: 12px; letter-spacing: .12em; }
+/* Rig card */
+.rigc { width: 300px; }
+.rigc .f { font: 800 34px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.rigc .f span { color: var(--dim); font-size: 22px; }
+.rigc .m { font: 600 14px var(--mono); color: var(--dim); margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.rigc .m #rigMode { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.onair { white-space: nowrap; flex: none; font: 800 13px/1 var(--mono); letter-spacing: .2em; padding: 6px 10px; border-radius: 6px; border: 1.5px solid rgba(255,90,90,.35); color: rgba(255,90,90,.45); }
+.onair.tx { color: #fff; background: #e11d2e; border-color: #ff6b6b; box-shadow: 0 0 22px rgba(255,40,60,.9), 0 0 60px rgba(255,40,60,.5); animation: tx 1s ease-in-out infinite; }
+@keyframes tx { 50% { box-shadow: 0 0 10px rgba(255,40,60,.6), 0 0 30px rgba(255,40,60,.3); } }
+.rigc.off .f, .rigc.off .m { color: var(--faint); }
+#qthMark.tx::before { border-color: #ff3b4e; box-shadow: 0 0 0 3px rgba(0,0,0,.75), inset 0 0 0 3px rgba(0,0,0,.75), 0 0 26px #ff2a3d; animation: tx 1s infinite; }
+
+/* Celebrations */
+#fx { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: none; }
+#celebrate { position: absolute; left: 0; top: 0; width: 1268px; height: 1080px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  pointer-events: none; opacity: 0; text-align: center; background: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,.72) 0%, rgba(0,0,0,.35) 45%, rgba(0,0,0,0) 70%); }
+#celebrate .k { font: 800 26px/1 var(--mono); letter-spacing: .3em; color: var(--cyan); text-shadow: 0 0 20px rgba(62,230,255,.7); }
+#celebrate .n { font: 800 92px/1.05 var(--sans); color: #fff; margin-top: 18px; text-shadow: 0 0 40px rgba(255,255,255,.35), 0 4px 20px #000; }
+#celebrate .n.call { font-family: var(--mono); color: var(--amber); font-size: 120px; text-shadow: 0 0 50px var(--amber-glow), 0 4px 20px #000; }
+#celebrate .c { font: 800 34px/1.2 var(--mono); margin-top: 18px; letter-spacing: .08em; text-shadow: 0 2px 12px #000; }
+#celebrate .s { font: 600 18px var(--mono); color: var(--dim); margin-top: 14px; letter-spacing: .16em; text-shadow: 0 2px 10px #000; }
+#toast { position: absolute; left: 634px; top: 210px; transform: translateX(-50%); pointer-events: none; opacity: 0; white-space: nowrap;
+  background: rgba(4,10,16,.82); border: 1.5px solid var(--line); border-radius: 14px; padding: 14px 24px; backdrop-filter: blur(8px);
+  font: 700 22px/1.3 var(--mono); box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+#toast .tk { font: 800 13px var(--mono); letter-spacing: .24em; display: block; margin-bottom: 6px; }
+#toast b { color: #fff; } #toast span { color: var(--dim); font-weight: 600; }
+/* Hand control of the globe: drag to turn it, Space or this button stops/starts the slow turn */
+#globe { cursor: grab; touch-action: none; } #globe.drag { cursor: grabbing; }
+.chip { position: absolute; font: 700 12px var(--mono); letter-spacing: .18em; color: var(--dim); opacity: .6;
+  background: rgba(3,8,14,.55); border: 1px solid var(--line); border-radius: 18px; padding: 8px 14px; cursor: pointer; }
+.chip:hover { opacity: 1; color: var(--ink); } .chip.on { opacity: 1; color: var(--amber); border-color: rgba(255,182,39,.5); }
+#spinBtn { right: 676px; top: 380px; } #setupBtn { right: 676px; top: 426px; }
+
+/* Station setup screen (first run, the SETUP button or the S key) */
+#setup { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; z-index: 10; background: rgba(0,0,0,.72); }
+#setup.open { display: flex; }
+#setup form { width: 700px; background: rgba(4,10,16,.94); border: 1.5px solid var(--line); border-radius: 16px; padding: 34px 40px;
+  box-shadow: 0 20px 80px rgba(0,0,0,.8); }
+#setup h2 { font: 800 30px/1 var(--mono); color: var(--amber); letter-spacing: .08em; }
+#setup p { font: 500 16px/1.4 var(--sans); color: var(--dim); margin: 10px 0 20px; }
+#setup label { display: block; font: 700 12px var(--mono); letter-spacing: .2em; color: var(--cyan); margin-bottom: 16px; }
+#setup label em { font-style: normal; color: var(--faint); letter-spacing: .04em; font-weight: 600; margin-left: 8px; }
+#setup input, #setup select { display: block; width: 100%; margin-top: 7px; font: 600 22px var(--mono); color: var(--ink);
+  background: #050b12; border: 1.5px solid var(--line); border-radius: 8px; padding: 10px 12px; outline: none; }
+#setup input:focus, #setup select:focus { border-color: var(--cyan); }
+#setup input:invalid:not(:placeholder-shown) { border-color: var(--bad); }
+#setup .row { display: flex; gap: 18px; } #setup .row label { flex: 1; }
+#setup .btns { display: flex; justify-content: flex-end; gap: 14px; margin-top: 8px; }
+#setup button { font: 800 15px var(--mono); letter-spacing: .14em; border-radius: 8px; padding: 13px 22px; cursor: pointer;
+  background: transparent; color: var(--dim); border: 1.5px solid var(--line); }
+#setup button[type=submit] { background: var(--amber); color: #000; border-color: var(--amber); }
+#setup .err { color: var(--bad); font: 600 15px var(--sans); min-height: 20px; margin-top: -4px; }
+#dropOverlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.8);
+  border: 4px dashed var(--amber); font: 700 40px var(--sans); color: var(--amber); z-index: 9; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="globe" width="1920" height="1080"></canvas>
+  <div id="labels"></div>
+  <div id="qthMark"><i class="n"></i><i class="s"></i><i class="e"></i><i class="w"></i></div>
+  <div class="frame tl"></div><div class="frame bl"></div><div class="frame tr"></div><div class="frame br"></div>
+
+  <div id="hud">
+    <div class="brand"><b id="brandCall">&nbsp;</b><div id="qth">&nbsp;</div><div class="mc">MISSION CONTROL</div></div>
+    <div class="clock utc"><div class="t" id="utc">--:--</div><div class="l">UTC</div></div>
+    <div class="clock"><div class="t" id="loc">--:--</div><div class="l" id="locLbl">LOCAL</div></div>
+    <div class="wxline"><b id="date">&nbsp;</b><span class="tmp" id="temp">--&deg;</span> <span id="cond"></span><div id="sun"></div><div class="alert" id="alert"></div></div>
+  </div>
+
+  <div id="bl">
+    <div class="glass"><h3>NEXT PASSES OVER <span id="passTown"></span> <em id="satNote">loading</em></h3><div id="passList"></div></div>
+    <div class="glass rigc off" id="rigCard"><h3>RIG <em id="rigSrc">waiting for WSJT-X</em></h3>
+      <div class="f" id="rigFreq">&mdash;.&mdash;&mdash;&mdash;<span>.&mdash;&mdash;&mdash;</span></div>
+      <div class="m"><span id="rigMode">RIG OFF</span><span class="onair" id="onAir">ON AIR</span></div></div>
+    <div class="glass"><h3>SPACE WEATHER</h3><div class="sw">
+      <div><span>SFI</span><b id="sfi">--</b><i id="sfiX">&nbsp;</i></div><div><span>Kp</span><b id="kp">--</b><i id="kpX">&nbsp;</i></div>
+      <div><span>A</span><b id="aidx">--</b><i id="aX">&nbsp;</i></div><div><span>X-RAY</span><b id="xray">--</b><i id="xrayX">&nbsp;</i></div></div></div>
+  </div>
+  <div id="ticker"><div class="lbl"><span class="livedot" id="dxDot"></span>DX CLUSTER</div><div id="tick"></div></div>
+  <div id="flash"></div>
+
+  <div id="right">
+    <div id="scope"><canvas id="radar" width="1244" height="1244"></canvas></div>
+    <div class="glass" id="air">
+      <h3><span><span class="livedot off" id="pskDot"></span><span id="airCall"></span> ON THE AIR</span><em id="pskNote">connecting to PSKReporter&hellip;</em></h3>
+      <div class="big"><b id="heardN">0</b><span id="heardTxt">&nbsp;</span></div>
+      <div class="sub" id="heardSub">&nbsp;</div>
+      <div id="heardList"></div>
+      <h3 style="margin-top:8px">WORLDWIDE ACTIVITY <em id="actNote">spots per minute, live</em></h3>
+      <div class="bands" id="bands"></div>
+      <div class="key"><span><i class="me"></i><span id="keyCall"></span> heard</span><span><i class="them"></i>other stations &middot; color = band</span></div>
+    </div>
+  </div>
+  <div class="scope-tag" style="left:1290px;top:40px">AZIMUTH<em id="azGrid"></em></div>
+  <button class="chip" id="setupBtn">&#9881; SETUP</button>
+  <button class="chip" id="spinBtn"></button>
+  <canvas id="fx" width="1920" height="1080"></canvas>
+  <div id="celebrate"><div class="k" id="ceK"></div><div class="n" id="ceN"></div><div class="c" id="ceC"></div><div class="s" id="ceS"></div></div>
+  <div id="toast"></div>
+  <div id="setup"><form id="setupForm" novalidate autocomplete="off">
+    <h2>STATION SETUP</h2>
+    <p>Fill these in once. They're saved in this browser. Change them any time with the SETUP button or the S key.</p>
+    <label>CALL SIGN<input name="call" placeholder="N0CALL" maxlength="12" pattern="[A-Za-z0-9\/]{3,12}" required></label>
+    <label>GRID SQUARE<em>4 or 6 characters &middot; fills in latitude and longitude</em><input name="grid" placeholder="EM28" maxlength="6"></label>
+    <div class="row">
+      <label>LATITUDE<em>north +, south &minus;</em><input name="lat" type="number" step="any" min="-90" max="90" placeholder="39.83" required></label>
+      <label>LONGITUDE<em>east +, west &minus;</em><input name="lon" type="number" step="any" min="-180" max="180" placeholder="-98.58" required></label>
+    </div>
+    <label>TOWN<em>shown under your call sign</em><input name="town" placeholder="LEBANON KS" maxlength="28"></label>
+    <label>TIME ZONE<select name="tz"></select></label>
+    <label>RELAY ADDRESS<em>optional &middot; leave blank if you don't run the relay</em><input name="relay" placeholder="http://192.168.1.50:8088"></label>
+    <div class="err" id="setupErr"></div>
+    <div class="btns"><button type="button" id="setupCancel">CANCEL</button><button type="submit">SAVE &amp; START</button></div>
+  </form></div>
+  <div id="dropOverlay">Drop your ADIF log to load your contacts</div>
+</div>
+
+<script type="module">
+import * as THREE from "three";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+
+// =====================================================================
+// YOUR SETTINGS: easiest is the setup screen that opens the first time (later: the SETUP button or S key).
+// Those are saved in the browser and win over these lines. To build your details into the file
+// instead (for a kiosk that gets wiped), change these lines, save, and reopen the page.
+// =====================================================================
+const SETTINGS = {
+  call:  "N0CALL",             // your call sign
+  lat:   39.8283,              // your latitude  (north is +, south is -)
+  lon:   -98.5795,             // your longitude (east is +, west is -)
+  town:  "LEBANON KS",         // shown under your call sign
+  tz:    "America/Chicago",    // your time zone (list: en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+  relay: "",                   // optional relay address, e.g. "http://192.168.1.50:8088" (blank = no relay)
+};
+// =====================================================================
+
+let SAVED = null;
+try { SAVED = JSON.parse(localStorage.getItem("hamclock-settings") || "null"); } catch (e) {}
+const CFG = { ...SETTINGS, ...(SAVED || {}) };
+const HOME = { lat: +CFG.lat, lon: +CFG.lon, name: String(CFG.town || "").toUpperCase(), tz: CFG.tz, call: String(CFG.call).toUpperCase() };
+const SATS = { "ISS (ZARYA)": "ISS", "SAUDISAT 1C (SO-50)": "SO-50", "OSCAR 7 (AO-7)": "AO-7", "RS-44 & BREEZE-KM R/B": "RS-44",
+  "GREENCUBE (IO-117)": "IO-117", "JAS-2 (FO-29)": "FO-29", "FUNCUBE-1 (AO-73)": "AO-73", "RADFXSAT (FOX-1B)": "AO-91",
+  "EYESAT A (AO-27)": "AO-27", "XW-3 (CAS-9)": "CAS-9", "DIWATA-2B": "PO-101" };
+const BAND_COLOR = { "160m":"#c084fc","80m":"#a78bfa","60m":"#818cf8","40m":"#60a5fa","30m":"#22d3ee","20m":"#34d399",
+  "17m":"#a3e635","15m":"#facc15","12m":"#fb923c","10m":"#f87171","6m":"#f472b6","2m":"#f5f5f5" };
+const ACT_BANDS = ["160m","80m","40m","30m","20m","17m","15m","12m","10m","6m"];
+const bandColor = b => BAND_COLOR[b] || "#9ca3af";
+const IMG = "https://unpkg.com/three-globe@2.31.0/example/img/";
+const D2R = Math.PI / 180, R2D = 180 / Math.PI, EARTH_KM = 6371;
+
+// Made-up contacts until a real ADIF log is dropped on the screen
+const SAMPLE = [
+ ["JA1QSO","20m",35.7,139.7],["VK2DX","20m",-33.9,151.2],["ZL1AA","40m",-36.8,174.8],["PY2XX","15m",-23.5,-46.6],["LU1DX","20m",-34.6,-58.4],
+ ["ZS6ABC","15m",-26.2,28.0],["Z21AB","20m",-17.8,31.0],["5Z4XY","17m",-1.3,36.8],["CN8AB","20m",33.6,-7.6],["EA8XX","15m",28.1,-15.4],
+ ["TF3XY","20m",64.1,-21.9],["G4ABC","40m",51.5,-0.1],["EI2XY","20m",53.3,-6.3],["F5ABC","20m",48.9,2.4],["DL1XYZ","40m",52.5,13.4],
+ ["I2ABC","20m",45.5,9.2],["EA4XY","20m",40.4,-3.7],["LA1XX","20m",59.9,10.8],["OH2XY","20m",60.2,24.9],["SP5AB","40m",52.2,21.0],
+ ["SV1XY","15m",38.0,23.7],["4X4XX","17m",32.1,34.8],["UA3XYZ","20m",55.8,37.6],["VU2AB","15m",28.6,77.2],["HS0XX","15m",13.8,100.5],
+ ["DU1AB","20m",14.6,121.0],["KH6XY","20m",21.3,-157.9],["KL7AB","20m",61.2,-149.9],["VE3XX","40m",43.7,-79.4],["VE7AB","20m",49.3,-123.1],
+ ["XE1AB","15m",19.4,-99.1],["KP4AB","20m",18.4,-66.1],["HK3XY","15m",4.7,-74.1],["CE3AB","20m",-33.4,-70.6],["W6ABC","40m",34.0,-118.2],
+ ["K5XYZ","40m",29.8,-95.4],["W7AB","20m",47.6,-122.3],["K0XX","40m",39.7,-105.0],["W1AB","80m",43.7,-70.3]
+].map(([call, band, lat, lon]) => ({ call, band, lat, lon }));
+
+// ---------- Fit the 1920x1080 design to the screen ----------
+const stage = document.getElementById("stage");
+function fit() {
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  stage.style.transform = `translate(${(innerWidth - 1920 * s) / 2}px, ${(innerHeight - 1080 * s) / 2}px) scale(${s})`;
+}
+addEventListener("resize", fit); fit();
+
+// ---------- Helpers ----------
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2, "0");
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const localTime = d => d.toLocaleTimeString("en-US", { timeZone: HOME.tz, hour: "numeric", minute: "2-digit" });
+const miles = (a, b) => d3.geoDistance([a.lon, a.lat], [b.lon, b.lat]) * 3958.8;
+function gridOf(lat, lon) {
+  const L = lon + 180, A = lat + 90;
+  return String.fromCharCode(65 + Math.floor(L / 20), 65 + Math.floor(A / 10)) + Math.floor((L % 20) / 2) + Math.floor(A % 10) +
+    String.fromCharCode(97 + Math.floor((L % 2) * 12), 97 + Math.floor((A % 1) * 24));
+}
+function gridToLatLon(g) {
+  g = (g || "").trim().toUpperCase();
+  if (!/^[A-R]{2}[0-9]{2}/.test(g)) return null;
+  let lon = (g.charCodeAt(0) - 65) * 20 - 180 + (+g[2]) * 2, lat = (g.charCodeAt(1) - 65) * 10 - 90 + (+g[3]);
+  if (/^[A-R]{2}[0-9]{2}[A-X]{2}/.test(g)) { lon += (g.charCodeAt(4) - 65) / 12 + 1 / 24; lat += (g.charCodeAt(5) - 65) / 24 + 1 / 48; }
+  else { lon += 1; lat += .5; }
+  return { lat, lon };
+}
+function bearing(a, b) {
+  const p1 = a.lat * D2R, p2 = b.lat * D2R, dl = (b.lon - a.lon) * D2R;
+  return (Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl)) * R2D + 360) % 360;
+}
+$("qth").textContent = `${HOME.name} · ${gridOf(HOME.lat, HOME.lon)}`;
+document.title = `${HOME.call} Mission Control`;
+$("brandCall").textContent = HOME.call; $("passTown").textContent = HOME.name;
+$("airCall").textContent = HOME.call; $("keyCall").textContent = HOME.call;
+$("azGrid").textContent = "FROM " + gridOf(HOME.lat, HOME.lon).slice(0, 4);
+
+// ---------- Clocks ----------
+function tickClock() {
+  const now = new Date();
+  $("utc").innerHTML = `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}<span class="s">:${pad(now.getUTCSeconds())}</span>`;
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: HOME.tz, hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23", timeZoneName: "short" }).formatToParts(now).map(x => [x.type, x.value]));
+  $("loc").innerHTML = `${p.hour}:${p.minute}<span class="s">:${p.second}</span>`;
+  $("locLbl").textContent = `LOCAL · ${p.timeZoneName}`;
+  $("date").textContent = now.toLocaleDateString("en-US", { timeZone: HOME.tz, weekday: "long", month: "short", day: "numeric" });
+}
+setInterval(tickClock, 1000); tickClock();
+
+// =====================================================================
+// 3D GLOBE
+// =====================================================================
+const canvas = $("globe");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.setSize(1920, 1080, false);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1920 / 1080, .1, 200);
+camera.setViewOffset(1920, 1080, 326, 0, 1920, 1080);   // shifts the globe left, leaving room for the radar
+
+// lat/lon -> point, matching how three.js wraps an equirectangular image on a sphere
+function ll2v(lat, lon, r = 1) {
+  const phi = (90 - lat) * D2R, th = (lon + 180) * D2R;
+  return new THREE.Vector3(-r * Math.sin(phi) * Math.cos(th), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(th));
+}
+const loader = new THREE.TextureLoader();
+loader.setCrossOrigin("anonymous");
+const tex = url => { const t = loader.load(url); t.anisotropy = 8; return t; };
+
+const sunDir = new THREE.Vector3(1, 0, 0);
+const earthMat = new THREE.ShaderMaterial({
+  uniforms: { dayTex: { value: tex(IMG + "earth-blue-marble.jpg") }, nightTex: { value: tex(IMG + "earth-night.jpg") },
+              waterTex: { value: tex(IMG + "earth-water.png") }, sunDir: { value: sunDir } },
+  vertexShader: `varying vec2 vUv; varying vec3 vN; varying vec3 vP;
+    void main(){ vUv = uv; vN = normalize(normal); vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+  fragmentShader: `uniform sampler2D dayTex, nightTex, waterTex; uniform vec3 sunDir; varying vec2 vUv; varying vec3 vN; varying vec3 vP;
+    void main(){
+      vec3 n = normalize(vN); float d = dot(n, normalize(sunDir));
+      float dayMix = smoothstep(-.10, .22, d);
+      vec3 day = texture2D(dayTex, vUv).rgb;
+      vec3 night = texture2D(nightTex, vUv).rgb; night = pow(night, vec3(1.3)) * vec3(1.9, 1.45, .9) * 1.7;
+      vec3 view = normalize(cameraPosition - vP);
+      float water = texture2D(waterTex, vUv).r;
+      float spec = pow(max(dot(n, normalize(normalize(sunDir) + view)), 0.), 60.) * water * .9 * dayMix;
+      vec3 col = mix(night + day * .025, day * (.22 + .95 * max(d, 0.)), dayMix);
+      col += vec3(1., .92, .8) * spec;
+      col += vec3(1., .42, .12) * .10 * smoothstep(.22, 0., abs(d - .02));     // sunset band
+      float rim = pow(1. - max(dot(n, view), 0.), 3.);
+      col += vec3(.25, .55, 1.) * rim * (.12 + .5 * dayMix);
+      gl_FragColor = vec4(col, 1.);
+    }` });
+const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 160, 160), earthMat);
+scene.add(earth);
+
+const cloudMat = new THREE.ShaderMaterial({
+  uniforms: { cloudTex: { value: tex("https://unpkg.com/globe.gl@2.34.4/example/clouds/clouds.png") }, sunDir: { value: sunDir } },
+  transparent: true, depthWrite: false,
+  vertexShader: `varying vec2 vUv; varying vec3 vN; void main(){ vUv = uv; vN = normalize(normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+  fragmentShader: `uniform sampler2D cloudTex; uniform vec3 sunDir; varying vec2 vUv; varying vec3 vN;
+    void main(){ vec4 c = texture2D(cloudTex, vUv); float a = max(c.a * dot(c.rgb, vec3(.33)), 0.);
+      float lit = smoothstep(-.12, .3, dot(normalize(vN), normalize(sunDir)));
+      gl_FragColor = vec4(vec3(1.) * (.05 + .95 * lit), a * (.25 + .6 * lit)); }` });
+const clouds = new THREE.Mesh(new THREE.SphereGeometry(1.007, 120, 120), cloudMat);
+scene.add(clouds);
+
+const atmo = new THREE.Mesh(new THREE.SphereGeometry(1.085, 96, 96), new THREE.ShaderMaterial({
+  side: THREE.BackSide, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  vertexShader: `varying vec3 vN; void main(){ vN = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+  fragmentShader: `varying vec3 vN; void main(){ float i = pow(max(.66 - dot(vN, vec3(0,0,1.)), 0.), 4.); gl_FragColor = vec4(.32, .64, 1., 1.) * i * 2.2; }` }));
+scene.add(atmo);
+
+(() => {   // starfield
+  const n = 5000, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(60 + Math.random() * 40);
+    pos.set([v.x, v.y, v.z], i * 3);
+    const b = .35 + Math.random() * .65, warm = Math.random() < .2;
+    col.set(warm ? [b, b * .85, b * .65] : [b * .8, b * .9, b], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: .18, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: .9 })));
+})();
+
+// Soft round glow sprite used for points
+const glowTex = (() => {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d"), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(.25, "rgba(255,255,255,.75)"); r.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+function glow(color, size) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  s.scale.setScalar(size); return s;
+}
+
+// Sun position (where it's overhead) drives the day/night shading
+function subsolar(date) {
+  const d = (date - Date.UTC(2000, 0, 1, 12)) / 864e5;
+  const g = (357.529 + .98560028 * d) * D2R, q = 280.459 + .98564736 * d;
+  const L = (q + 1.915 * Math.sin(g) + .020 * Math.sin(2 * g)) * D2R, e = (23.439 - 3.6e-7 * d) * D2R;
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)) * R2D, dec = Math.asin(Math.sin(e) * Math.sin(L)) * R2D;
+  let lon = ra - (280.46061837 + 360.98564736629 * d) % 360; lon = ((lon + 540) % 360) - 180;
+  return { lat: dec, lon };
+}
+function updateSun() { const s = subsolar(new Date()); sunDir.copy(ll2v(s.lat, s.lon)).normalize(); }
+updateSun(); setInterval(updateSun, 30e3);
+
+// Home beacon
+const homeV = ll2v(HOME.lat, HOME.lon, 1.002);
+const homeGroup = new THREE.Group(); scene.add(homeGroup);
+const homeCore = glow(0xffb627, .07); homeCore.position.copy(homeV); homeGroup.add(homeCore);
+const beaconGeo = new THREE.CylinderGeometry(.0035, .0035, .16, 8); beaconGeo.translate(0, .08, 0);
+const beacon = new THREE.Mesh(beaconGeo, new THREE.MeshBasicMaterial({ color: 0xffb627, transparent: true, opacity: .85, blending: THREE.AdditiveBlending }));
+beacon.position.copy(homeV); beacon.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), homeV.clone().normalize()); homeGroup.add(beacon);
+const ringGeo = new THREE.RingGeometry(.9, 1, 64);
+const homeRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffb627, transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+homeRing.position.copy(ll2v(HOME.lat, HOME.lon, 1.003)); homeRing.lookAt(homeRing.position.clone().multiplyScalar(2)); homeGroup.add(homeRing);
+
+// ---------- Logbook contacts: light pillars ----------
+let QSOS = SAMPLE, isSample = true;
+try { const s = JSON.parse(localStorage.getItem("hamclock-qsos") || "null"); if (Array.isArray(s) && s.length) { QSOS = s; isSample = false; } } catch (e) {}
+const qsoGroup = new THREE.Group(); scene.add(qsoGroup);
+function drawQsos() {
+  qsoGroup.clear();
+  const seen = new Set();
+  for (const q of QSOS) {
+    if (q.lat == null) continue;
+    const k = q.lat.toFixed(0) + "," + q.lon.toFixed(0); if (seen.has(k)) continue; seen.add(k);
+    const v = ll2v(q.lat, q.lon, 1.001), up = v.clone().normalize();
+    const h = .035;
+    const g = new THREE.CylinderGeometry(.0016, .0016, h, 6); g.translate(0, h / 2, 0);
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: bandColor(q.band), transparent: true, opacity: .8, blending: THREE.AdditiveBlending }));
+    m.position.copy(v); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up); qsoGroup.add(m);
+    const tip = glow(bandColor(q.band), .022); tip.position.copy(v.clone().add(up.clone().multiplyScalar(h))); qsoGroup.add(tip);
+  }
+}
+drawQsos();
+
+// ---------- Arcs between two places ----------
+const arcGroup = new THREE.Group(); scene.add(arcGroup);
+const arcs = [];
+function arcPoints(a, b, n = 72, lift = 1) {
+  const interp = d3.geoInterpolate([a.lon, a.lat], [b.lon, b.lat]);
+  const dist = d3.geoDistance([a.lon, a.lat], [b.lon, b.lat]);
+  const h = (.015 + dist * .085) * lift, pts = [];
+  for (let i = 0; i <= n; i++) { const t = i / n, [lon, lat] = interp(t); pts.push(ll2v(lat, lon, 1.003 + h * Math.sin(Math.PI * t))); }
+  return pts;
+}
+// thin additive line for worldwide traffic
+function addArc(a, b, color, { life = 5, grow = 1.4 } = {}) {
+  const pts = arcPoints(a, b), flat = [];
+  pts.forEach(p => flat.push(p.x, p.y, p.z));
+  const g = new LineGeometry(); g.setPositions(flat); g.instanceCount = 0;
+  const mat = new LineMaterial({ color, linewidth: 1.7, transparent: true, opacity: .8, blending: THREE.AdditiveBlending, depthWrite: false });
+  mat.resolution.set(1920, 1080);
+  const line = new Line2(g, mat); arcGroup.add(line);
+  const end = glow(color, .035); end.position.copy(pts[pts.length - 1]); end.material.opacity = 0; arcGroup.add(end);
+  arcs.push({ line, end, born: performance.now() / 1000, life, grow, n: pts.length - 1, fat: true, mat, thin: true });
+}
+// fat glowing arc for your station being heard
+const fatMats = [];
+// Your own signal: white-hot core inside a wide amber glow, with a pulse running out to the station.
+// Built to look nothing like the thin band-colored worldwide arcs.
+function removeArc(i) {
+  const a = arcs[i];
+  for (const o of [a.line, a.end, a.halo, a.pulse]) if (o) { arcGroup.remove(o); if (o.isLine2) o.geometry.dispose(); o.material.dispose(); }   // sprites share one geometry
+  arcs.splice(i, 1);
+}
+function addFatArc(a, b, key, life = 1800, { core = 0xffe7b0, glowHex = 0xff9a1f } = {}) {
+  const old = arcs.findIndex(x => x.key === key); if (old >= 0) removeArc(old);   // one beam per station
+  const pts = arcPoints(a, b, 96, 1.3), flat = [];
+  pts.forEach(p => flat.push(p.x, p.y, p.z));
+  // Dim near home and full strength from ~20% of the way out, so dozens of beams
+  // starting at the same spot don't pile up into a white blob over the QTH
+  const ramp = i => { const t = i / (pts.length - 1); return Math.min(1, Math.max(.04, (t - .02) / .2)); };
+  const make = (hex, width, opacity) => {
+    const c = new THREE.Color(hex), cols = [];
+    pts.forEach((p, i) => { const r = ramp(i); cols.push(c.r * r, c.g * r, c.b * r); });
+    const g = new LineGeometry(); g.setPositions(flat); g.setColors(cols); g.instanceCount = 0;
+    const m = new LineMaterial({ color: 0xffffff, vertexColors: true, linewidth: width, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false });
+    m.resolution.set(1920, 1080); return new Line2(g, m);
+  };
+  const halo = make(glowHex, 4.5, .1), line = make(core, 1.5, .6);
+  arcGroup.add(halo); arcGroup.add(line);
+  const end = glow(0xffd27a, .03); end.position.copy(pts[pts.length - 1]); arcGroup.add(end);
+  const pulse = glow(0xfff0c8, .035); pulse.material.opacity = 0; arcGroup.add(pulse);
+  arcs.push({ key, line, halo, end, pulse, pts, born: performance.now() / 1000, life, grow: 2.2, n: pts.length - 1, fat: true, mat: line.material });
+}
+function updateArcs(t) {
+  let rank = 0;
+  for (let i = arcs.length - 1; i >= 0; i--) if (arcs[i].halo) arcs[i].rank = rank++;   // 0 = newest beam
+  for (let i = arcs.length - 1; i >= 0; i--) {
+    const a = arcs[i], age = t - a.born, k = Math.min(1, age / a.grow);
+    const shown = Math.max(2, Math.floor(a.n * (1 - Math.pow(1 - k, 3))));
+    a.line.geometry.instanceCount = shown;
+    const fade = age < a.life - 1.5 ? 1 : Math.max(0, (a.life - age) / 1.5);
+    // a beam is "hot" for its first 90 s and while it's one of the 6 newest; after that it's a faint ghost
+    const hot = !a.halo || (a.rank < 6 && age < 90);
+    const b = hot ? 1 : .18;
+    a.mat.opacity = (a.thin ? .8 : .6) * fade * b;
+    a.end.material.opacity = k >= 1 ? fade * (a.thin ? .9 : Math.max(.45, b)) : 0;
+    if (a.halo) {
+      a.halo.geometry.instanceCount = shown;
+      a.halo.material.opacity = hot ? (.08 + .04 * Math.sin(t * 3)) * fade : 0;
+      // a pulse travels home -> station every 2.4 s while the beam is hot
+      const p = k >= 1 ? ((age - a.grow) % 2.4) / 2.4 : 0;
+      a.pulse.material.opacity = hot && k >= 1 ? .8 * fade * Math.sin(Math.PI * p) : 0;
+      a.pulse.position.copy(a.pts[Math.min(a.n, Math.floor(p * a.n))]);
+      a.end.scale.setScalar(.03 * (hot ? 1 + .3 * Math.max(0, Math.sin(t * 4)) : .8));
+    }
+    if (age > a.life) removeArc(i);
+  }
+}
+
+// ---------- Satellites ----------
+const satGroup = new THREE.Group(); scene.add(satGroup);
+let sats = [];
+const observer = { latitude: HOME.lat * D2R, longitude: HOME.lon * D2R, height: .03 };
+function satNow(s, date) {
+  const pv = satellite.propagate(s.rec, date); if (!pv.position) return null;
+  const gmst = satellite.gstime(date), gd = satellite.eciToGeodetic(pv.position, gmst);
+  return { lat: gd.latitude * R2D, lon: gd.longitude * R2D, alt: gd.height, look: satellite.ecfToLookAngles(observer, satellite.eciToEcf(pv.position, gmst)) };
+}
+async function loadTles() {
+  let txt = null;
+  try { const c = JSON.parse(localStorage.getItem("hamclock-tle") || "null"); if (c && Date.now() - c.t < 6 * 3600e3) txt = c.txt; } catch (e) {}
+  if (!txt) {   // CelesTrak asks not to re-download more than every couple of hours
+    txt = await (await fetch("https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle")).text();
+    try { localStorage.setItem("hamclock-tle", JSON.stringify({ t: Date.now(), txt })); } catch (e) {}
+  }
+  const L = txt.split(/\r?\n/); const out = [];
+  for (let i = 0; i + 2 < L.length; i++) {
+    const name = L[i].trim();
+    if (SATS[name] && L[i + 1].startsWith("1 ") && L[i + 2].startsWith("2 "))
+      out.push({ name: SATS[name], iss: name.startsWith("ISS"), rec: satellite.twoline2satrec(L[i + 1], L[i + 2]) });
+  }
+  return out;
+}
+// Orbit ring drawn in space (frozen to the current Earth rotation so it's a clean loop)
+function orbitRing(s) {
+  const now = new Date(), gmst = satellite.gstime(now), period = 2 * Math.PI / s.rec.no;   // minutes
+  const pts = [];
+  for (let m = 0; m <= period + .5; m += period / 180) {
+    const pv = satellite.propagate(s.rec, new Date(+now + m * 60e3)); if (!pv.position) continue;
+    const e = satellite.eciToEcf(pv.position, gmst), r = Math.hypot(e.x, e.y, e.z);
+    pts.push(ll2v(Math.asin(e.z / r) * R2D, Math.atan2(e.y, e.x) * R2D, r / EARTH_KM));
+  }
+  return pts;
+}
+function buildSats() {
+  satGroup.clear();
+  for (const s of sats) {
+    const pts = orbitRing(s), flat = []; pts.forEach(p => flat.push(p.x, p.y, p.z));
+    const g = new LineGeometry(); g.setPositions(flat);
+    s.ringMat = new LineMaterial({ color: s.iss ? 0xffffff : 0xc4f542, linewidth: s.iss ? 1.6 : 1, transparent: true, opacity: s.iss ? .45 : .22,
+      blending: THREE.AdditiveBlending, depthWrite: false });
+    s.ringMat.resolution.set(1920, 1080); fatMats.push(s.ringMat);
+    satGroup.add(new Line2(g, s.ringMat));
+    s.dot = glow(s.iss ? 0xffffff : 0xc4f542, s.iss ? .085 : .055); satGroup.add(s.dot);
+    s.core = new THREE.Mesh(new THREE.SphereGeometry(s.iss ? .011 : .007, 12, 12), new THREE.MeshBasicMaterial({ color: s.iss ? 0xffffff : 0xe8ff9a }));
+    satGroup.add(s.core);
+  }
+}
+function updateSats() {
+  const now = new Date();
+  for (const s of sats) {
+    const p = satNow(s, now); if (!p) continue;
+    s.pos = p; s.v = ll2v(p.lat, p.lon, 1 + p.alt / EARTH_KM); s.up = p.look.elevation > 0;
+    s.dot.position.copy(s.v); s.core.position.copy(s.v);
+    s.dot.material.color.set(s.up ? 0xffffff : (s.iss ? 0xffffff : 0xc4f542));
+  }
+}
+function findPasses() {
+  const now = Date.now(), out = [];
+  for (const s of sats) {
+    let cur = null, n = 0;
+    for (let t = now; t < now + 12 * 3600e3; t += 30e3) {
+      const p = satNow(s, new Date(t)); if (!p) break;
+      const el = p.look.elevation * R2D;
+      if (el > 0) { if (!cur) cur = { s, aos: t, max: el }; else cur.max = Math.max(cur.max, el); }
+      else if (cur) { cur.los = t; out.push(cur); cur = null; if (++n >= 2) break; }
+    }
+    if (cur) { cur.los = now + 12 * 3600e3; out.push(cur); }
+  }
+  return out.filter(o => o.max >= 10).sort((a, b) => a.aos - b.aos);
+}
+let passes = [];
+function showPasses() {
+  const now = Date.now(); passes = passes.filter(p => p.los > now);
+  $("passList").innerHTML = passes.slice(0, 3).map(p => {
+    const up = p.aos <= now, mins = Math.round((p.aos - now) / 60e3);
+    let inTxt = mins < 60 ? `in ${mins}m` : `in ${Math.floor(mins / 60)}h${pad(mins % 60)}`;
+    if (up) { const q = satNow(p.s, new Date()); inTxt = q ? `UP ${Math.round(q.look.elevation * R2D)}°` : "UP"; }
+    return `<div class="pass${up ? " up" : ""}"><span class="n${p.s.iss ? " iss" : ""}">${p.s.name}</span><span class="w">${localTime(new Date(p.aos))}</span>
+      <span class="e">max <b>${Math.round(p.max)}°</b></span><span class="in">${inTxt}</span></div>`;
+  }).join("") || `<div class="pass"><span class="e" style="grid-column:1/-1;text-align:left">No good passes in the next 12 hours</span></div>`;
+}
+async function startSats() {
+  try {
+    sats = await loadTles(); buildSats(); updateSats(); passes = findPasses(); showPasses();
+    $("satNote").textContent = `${sats.length} sats tracked`;
+  } catch (e) { $("satNote").textContent = "satellite data offline"; }
+}
+startSats();
+setInterval(() => { if (sats.length) { updateSats(); showPasses(); } }, 1000);
+setInterval(() => { if (sats.length) { passes = findPasses(); buildSats(); updateSats(); } }, 10 * 60e3);
+setInterval(startSats, 6 * 3600e3);
+
+// ---------- HTML labels that follow points on the globe ----------
+const labelsEl = $("labels");
+const labelPool = new Map();
+function label(key, cls, html) {
+  let el = labelPool.get(key);
+  if (!el) { el = document.createElement("div"); labelsEl.appendChild(el); labelPool.set(key, el); }
+  el.className = "gl " + cls; if (el._h !== html) { el.innerHTML = html; el._h = html; }
+  el._used = true; return el;
+}
+const tmpV = new THREE.Vector3(), ray = new THREE.Ray();
+function visible(p) {   // false when the Earth is between the camera and the point
+  ray.origin.copy(camera.position); ray.direction.copy(p).sub(camera.position).normalize();
+  const hit = ray.intersectSphere(new THREE.Sphere(new THREE.Vector3(), .995), tmpV);
+  return !hit || hit.distanceTo(camera.position) > p.distanceTo(camera.position) - 1e-3;
+}
+function place(el, p) {
+  if (!visible(p)) { el.style.display = "none"; return; }
+  tmpV.copy(p).project(camera);
+  const x = (tmpV.x + 1) / 2 * 1920, y = (1 - tmpV.y) / 2 * 1080;
+  if (x > 1250) { el.style.display = "none"; return; }
+  el.style.display = "block"; el.style.left = x + "px"; el.style.top = y + "px";
+}
+function updateLabels() {
+  labelPool.forEach(el => el._used = false);
+  place(label("home", "home", HOME.call), homeV);
+  const qm = $("qthMark"), hl = labelPool.get("home");
+  qm.style.display = hl.style.display; qm.style.left = hl.style.left; qm.style.top = hl.style.top;
+  qm.classList.toggle("tx", !!rigState.tx);
+  for (const s of sats) if (s.v) place(label("sat" + s.name, s.iss ? "iss" : "sat", s.name), s.v);
+  for (const h of [...heard].filter(h => h.mi > 400).sort((a, b) => b.mi - a.mi).slice(0, 6)) place(label("h" + h.call, "heard", `${esc(h.call)} <span>${h.snr} dB</span>`), h.v);
+  labelPool.forEach((el, k) => { if (!el._used) { el.remove(); labelPool.delete(k); } });
+}
+
+// ---------- Camera: slow orbit, swings home when you are heard ----------
+const cam = { lon: HOME.lon - 25, lat: 24, dist: 14, focus: null, focusUntil: 0 };
+cam.paused = false; cam.holdUntil = 0;   // paused = operator stopped the slow turn; holdUntil = just dragged it
+try { cam.paused = localStorage.getItem("hamclock-spin") === "1"; } catch (e) {}
+// Any angle -> -180..180. JS % keeps the sign of a negative number, so wrap twice; the old one-step version
+// sent the camera spinning for the whole swing once cam.lon had grown past a few hundred degrees.
+const wrap180 = d => (((d + 180) % 360) + 360) % 360 - 180;
+const camFree = () => !cam.paused && performance.now() / 1000 > cam.holdUntil;   // false while the operator holds the view
+let intro = true;
+function updateCamera(t, dt) {
+  if (intro) { cam.dist += (4.35 - cam.dist) * Math.min(1, dt * 1.1); if (Math.abs(cam.dist - 4.35) < .01) intro = false; }
+  if (cam.focus && t < cam.focusUntil) {
+    const dl = wrap180(cam.focus.lon - cam.lon);
+    cam.lon += dl * Math.min(1, dt * .8); cam.lat += (cam.focus.lat - cam.lat) * Math.min(1, dt * .8);
+  } else {
+    cam.focus = null;
+    if (camFree()) {
+      cam.lon += dt * 2.2;   // one turn about every 2.7 minutes
+      cam.lat += (22 - cam.lat) * Math.min(1, dt * .3);
+    }
+  }
+  cam.lon = wrap180(cam.lon);
+  camera.position.copy(ll2v(cam.lat, cam.lon, cam.dist)); camera.lookAt(0, 0, 0);
+}
+
+// Hand control: drag the globe to turn it; it holds there for a minute, then the slow turn picks up again.
+// Space (or the button) stops/starts the slow turn for good, and the browser remembers the choice.
+// While the operator holds the view, "heard by" swings and pop-ups leave the camera alone.
+const spinBtn = $("spinBtn");
+let dragAt = null;
+function showSpin() { spinBtn.classList.toggle("on", cam.paused); spinBtn.textContent = cam.paused ? "\u25B6 GLOBE STOPPED \u00B7 SPACE" : "\u23F8 STOP GLOBE"; }
+function toggleSpin() {
+  cam.paused = !cam.paused; cam.holdUntil = 0;
+  try { localStorage.setItem("hamclock-spin", cam.paused ? "1" : ""); } catch (e) {}
+  showSpin();
+}
+canvas.addEventListener("pointerdown", e => {
+  dragAt = { x: e.clientX, y: e.clientY }; cam.focus = null; cam.holdUntil = performance.now() / 1000 + 60;
+  canvas.setPointerCapture(e.pointerId); canvas.classList.add("drag");
+});
+canvas.addEventListener("pointermove", e => {
+  if (!dragAt) return;
+  const k = .12 * 1920 / stage.getBoundingClientRect().width;   // degrees per screen pixel (stage is scaled to fit)
+  cam.lon -= (e.clientX - dragAt.x) * k;
+  cam.lat = Math.max(-70, Math.min(75, cam.lat + (e.clientY - dragAt.y) * k));
+  dragAt = { x: e.clientX, y: e.clientY }; cam.holdUntil = performance.now() / 1000 + 60;
+});
+const endDrag = () => { dragAt = null; canvas.classList.remove("drag"); };
+canvas.addEventListener("pointerup", endDrag); canvas.addEventListener("pointercancel", endDrag);
+spinBtn.addEventListener("click", () => { toggleSpin(); spinBtn.blur(); });
+showSpin();
+
+// =====================================================================
+// RADAR SCOPE (azimuthal equidistant, centred on your QTH)
+// =====================================================================
+const rc = $("radar"), rx = rc.getContext("2d"), RS = 1244, RC = RS / 2, RR = RS / 2 - 18;
+const rproj = d3.geoAzimuthalEquidistant().rotate([-HOME.lon, -HOME.lat]).clipAngle(179.5).scale(RR / Math.PI).translate([RC, RC]);
+const land = document.createElement("canvas"); land.width = land.height = RS;
+let landReady = false, countries = [];
+d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-110m.json").then(world => {
+  countries = topojson.feature(world, world.objects.countries).features;
+  const g = land.getContext("2d"), p = d3.geoPath(rproj, g);
+  g.beginPath(); p(topojson.feature(world, world.objects.land)); g.fillStyle = "rgba(61,255,158,.07)"; g.fill();
+  g.lineWidth = 1.6; g.strokeStyle = "rgba(61,255,158,.55)"; g.shadowColor = "rgba(61,255,158,.8)"; g.shadowBlur = 6; g.stroke();
+  g.shadowBlur = 0;
+  // range rings every 2,500 miles, crosshairs and heading ticks
+  g.strokeStyle = "rgba(61,255,158,.22)"; g.lineWidth = 1.2; g.fillStyle = "rgba(61,255,158,.6)"; g.font = "600 20px JetBrains Mono";
+  for (const mi of [2500, 5000, 7500, 10000]) {
+    const r = RR * (mi / 3958.8) / Math.PI;
+    g.beginPath(); g.arc(RC, RC, r, 0, 2 * Math.PI); g.stroke(); g.fillText(mi.toLocaleString(), RC + 6, RC - r + 22);
+  }
+  g.beginPath(); g.moveTo(RC - RR, RC); g.lineTo(RC + RR, RC); g.moveTo(RC, RC - RR); g.lineTo(RC, RC + RR); g.stroke();
+  for (let a = 0; a < 360; a += 5) {
+    const r1 = RR - (a % 30 ? 8 : 18), s = Math.sin(a * D2R), c = -Math.cos(a * D2R);
+    g.beginPath(); g.moveTo(RC + s * r1, RC + c * r1); g.lineTo(RC + s * RR, RC + c * RR); g.strokeStyle = "rgba(61,255,158,.6)"; g.stroke();
+    if (a % 30 === 0) {
+      g.save(); g.translate(RC + s * (RR - 38), RC + c * (RR - 38)); g.fillStyle = "rgba(61,255,158,.85)"; g.font = "700 22px JetBrains Mono";
+      g.textAlign = "center"; g.textBaseline = "middle"; g.fillText({ 0: "N", 90: "E", 180: "S", 270: "W" }[a] || String(a), 0, 0); g.restore();
+    }
+  }
+  landReady = true;
+  loadSpots();
+});
+const blips = { heard: [], spots: [], qso: [] };
+function blipXY(o) { const p = rproj([o.lon, o.lat]); return p ? { x: p[0], y: p[1], az: bearing(HOME, o) } : null; }
+function drawRadar(t) {
+  rx.clearRect(0, 0, RS, RS);
+  if (landReady) rx.drawImage(land, 0, 0);
+  const sweep = (t * 60) % 360;   // one sweep every 6 s
+  const ang = (sweep - 90) * D2R;
+  const cg = rx.createConicGradient(ang - 1.2, RC, RC);
+  cg.addColorStop(0, "rgba(61,255,158,0)"); cg.addColorStop(1.2 / (2 * Math.PI), "rgba(61,255,158,.30)"); cg.addColorStop(1.2 / (2 * Math.PI) + .001, "rgba(61,255,158,0)");
+  rx.fillStyle = cg; rx.beginPath(); rx.arc(RC, RC, RR, 0, 2 * Math.PI); rx.fill();
+  rx.strokeStyle = "rgba(160,255,200,.9)"; rx.lineWidth = 2.5; rx.shadowColor = "#3dff9e"; rx.shadowBlur = 14;
+  rx.beginPath(); rx.moveTo(RC, RC); rx.lineTo(RC + Math.cos(ang) * RR, RC + Math.sin(ang) * RR); rx.stroke(); rx.shadowBlur = 0;
+
+  const glowAt = az => { const d = (sweep - az + 360) % 360; return .18 + .82 * Math.exp(-d / 70); };
+  const dot = (b, color, r, text) => {
+    const k = glowAt(b.az);
+    rx.globalAlpha = k; rx.fillStyle = color; rx.shadowColor = color; rx.shadowBlur = 16 * k;
+    rx.beginPath(); rx.arc(b.x, b.y, r, 0, 2 * Math.PI); rx.fill(); rx.shadowBlur = 0;
+    if (text && k > .35) { rx.font = "700 21px JetBrains Mono"; rx.fillText(text, b.x + r + 6, b.y + 7); }
+    rx.globalAlpha = 1;
+  };
+  for (const b of blips.qso) dot(b, "rgba(61,255,158,.8)", 4);
+  for (const b of blips.spots) dot(b, "#3ee6ff", 6, b.call);
+  for (const s of sats) if (s.pos) { const b = blipXY(s.pos); if (b) dot(b, s.iss ? "#ffffff" : "#c4f542", s.iss ? 8 : 6, s.name); }
+  for (const q of logged) if (q.b) dot(q.b, "#ffffff", 7, q.call);
+  for (const h of heard) if (h.b) dot(h.b, "#ffb627", 8, h.call);
+  // home in the centre
+  rx.fillStyle = "#ffb627"; rx.shadowColor = "#ffb627"; rx.shadowBlur = 20; rx.beginPath(); rx.arc(RC, RC, 8, 0, 2 * Math.PI); rx.fill(); rx.shadowBlur = 0;
+}
+function refreshQsoBlips() { blips.qso = QSOS.filter(q => q.lat != null).map(q => ({ ...q, ...blipXY(q) })).filter(b => b.x != null); }
+refreshQsoBlips();
+
+// =====================================================================
+// LIVE SIGNALS (PSKReporter MQTT)
+// =====================================================================
+let heard = [];            // stations hearing you, newest first
+const bandCount = {};      // worldwide spots per band, rolling minute
+const spotQueue = [];
+let totalSpots = 0, lastFlash = 0;
+function flash(main, sub) {
+  const f = $("flash"); f.innerHTML = `${main}<small>${sub}</small>`;
+  f.animate([{ opacity: 0, transform: "scale(.92)" }, { opacity: 1, transform: "scale(1)", offset: .12 }, { opacity: 1, offset: .75 }, { opacity: 0 }],
+    { duration: 5200, easing: "ease-out" });
+}
+function onHeard(m) {
+  const rl = gridToLatLon(m.rl); if (!rl) return;
+  const call = m.rc, prev = heard.find(h => h.call === call);
+  const rec = { call, grid: (m.rl || "").slice(0, 6), lat: rl.lat, lon: rl.lon, snr: m.rp, band: m.b, mode: m.md, t: Date.now(),
+    mi: Math.round(miles(HOME, rl)), v: ll2v(rl.lat, rl.lon, 1.004) };
+  rec.b = blipXY(rec); rec.az = Math.round(bearing(HOME, rl));
+  heard = [rec, ...heard.filter(h => h.call !== call)];
+  addFatArc(HOME, rl, call);
+  if (!prev && Date.now() - lastFlash > 7000) {
+    lastFlash = Date.now();
+    flash(`HEARD BY ${call}`, `${rec.mi.toLocaleString()} MILES · ${rec.band} ${rec.mode} · ${rec.snr} dB`);
+    const mid = d3.geoInterpolate([HOME.lon, HOME.lat], [rl.lon, rl.lat])(.5);
+    if (camFree()) { cam.focus = { lon: mid[0], lat: Math.max(-10, Math.min(45, mid[1])) }; cam.focusUntil = performance.now() / 1000 + 14; }
+  }
+  showHeard(call);
+}
+function showHeard(newCall) {
+  const cut = Date.now() - 30 * 60e3; heard = heard.filter(h => h.t > cut);
+  $("heardN").textContent = heard.length;
+  $("heardTxt").innerHTML = `station${heard.length === 1 ? "" : "s"} hearing ${esc(HOME.call)}<br>in the last 30 minutes`;
+  if (heard.length) {
+    const far = heard.reduce((a, b) => b.mi > a.mi ? b : a), best = heard.reduce((a, b) => b.snr > a.snr ? b : a);
+    $("heardSub").innerHTML = `Farthest <b>${far.call}</b> ${far.mi.toLocaleString()} mi &nbsp;·&nbsp; Loudest <b>${best.call}</b> ${best.snr} dB`;
+  } else $("heardSub").innerHTML = "Get on the air — every station that decodes you lights up here";
+  $("heardList").innerHTML = heard.slice(0, 5).map(h => `<div class="hr${h.call === newCall ? " new" : ""}"><span class="c">${esc(h.call)}</span>
+    <span>${esc(h.grid)}</span><span style="color:${bandColor(h.band)}">${esc(h.band)} ${esc(h.mode)}</span><span class="d">${h.mi.toLocaleString()} mi</span><span class="s">${h.snr} dB</span></div>`).join("");
+}
+showHeard();
+setInterval(() => showHeard(), 30e3);
+
+function onSpot(topic, payload) {
+  let m; try { m = JSON.parse(payload); } catch (e) { return; }
+  if (m.sc === HOME.call) { onHeard(m); return; }
+  totalSpots++;
+  const b = m.b; if (b) (bandCount[b] = bandCount[b] || []).push(Date.now());
+  if (spotQueue.length < 400) spotQueue.push(m);
+}
+function startPsk() {
+  try {
+    const client = mqtt.connect("wss://mqtt.pskreporter.info:1886/mqtt", { reconnectPeriod: 8000, connectTimeout: 15000 });
+    client.on("connect", () => {
+      $("pskDot").className = "livedot"; $("pskNote").textContent = "live from PSKReporter";
+      client.subscribe(["pskr/filter/v2/+/+/" + HOME.call + "/#", "pskr/filter/v2/+/FT8/#", "pskr/filter/v2/+/CW/#"]);
+    });
+    client.on("message", (topic, payload) => onSpot(topic, payload.toString()));
+    client.on("close", () => { $("pskDot").className = "livedot off"; $("pskNote").textContent = "reconnecting…"; });
+  } catch (e) { $("pskNote").textContent = "PSKReporter offline"; }
+}
+startPsk();
+// Draw a few worldwide signals per second, preferring long hauls (they look best)
+setInterval(() => {
+  if (!spotQueue.length || arcs.length > 160) return;
+  let best = null, bestD = 0;
+  for (let i = 0; i < 6 && spotQueue.length; i++) {
+    const m = spotQueue.splice(Math.floor(Math.random() * spotQueue.length), 1)[0];
+    const a = gridToLatLon(m.sl), b = gridToLatLon(m.rl); if (!a || !b) continue;
+    const d = d3.geoDistance([a.lon, a.lat], [b.lon, b.lat]); if (d > bestD) { bestD = d; best = { a, b, band: m.b }; }
+  }
+  if (best && bestD > .05) addArc(best.a, best.b, bandColor(best.band), { life: 4 + Math.random() * 3 });
+  if (spotQueue.length > 300) spotQueue.splice(0, 200);
+}, 140);
+function showBands() {
+  const cut = Date.now() - 60e3;
+  for (const b in bandCount) bandCount[b] = bandCount[b].filter(t => t > cut);
+  const max = Math.sqrt(Math.max(1, ...ACT_BANDS.map(b => (bandCount[b] || []).length)));
+  $("bands").innerHTML = ACT_BANDS.map(b => { const n = (bandCount[b] || []).length;
+    return `<div><i style="height:${Math.max(2, Math.sqrt(n) / max * 38)}px;background:${bandColor(b)};box-shadow:0 0 10px ${bandColor(b)}"></i>${b.replace("m", "")}</div>`; }).join("");
+  const perMin = ACT_BANDS.reduce((s, b) => s + (bandCount[b] || []).length, 0);
+  $("actNote").textContent = `${perMin.toLocaleString()} spots / min · FT8 + CW`;
+}
+setInterval(showBands, 2000); showBands();
+
+// ---------- ADIF import: drag a .adi file onto the screen ----------
+function parseAdif(text) {
+  const body = /<eoh>/i.test(text) ? text.split(/<eoh>/i)[1] : text, out = [];
+  for (const rec of body.split(/<eor>/i)) {
+    const f = {}; const re = /<(\w+):(\d+)(?::\w)?>/g; let m;
+    while ((m = re.exec(rec))) { f[m[1].toUpperCase()] = rec.substr(re.lastIndex, +m[2]); re.lastIndex += +m[2]; }
+    if (!f.CALL) continue;
+    let ll = null;
+    if (f.LAT && f.LON) {
+      const dm = s => { const x = /([NSEW])(\d{3}) ([\d.]+)/i.exec(s); return x ? (/[SW]/i.test(x[1]) ? -1 : 1) * (+x[2] + x[3] / 60) : null; };
+      const a = dm(f.LAT), o = dm(f.LON); if (a != null && o != null) ll = { lat: a, lon: o };
+    }
+    if (!ll) ll = gridToLatLon(f.GRIDSQUARE);
+    out.push({ call: f.CALL.toUpperCase(), band: (f.BAND || "").toLowerCase(), lat: ll ? +ll.lat.toFixed(3) : null, lon: ll ? +ll.lon.toFixed(3) : null });
+  }
+  return out;
+}
+const ov = $("dropOverlay");
+addEventListener("dragover", e => { e.preventDefault(); ov.style.display = "flex"; });
+addEventListener("dragleave", e => { if (!e.relatedTarget) ov.style.display = "none"; });
+addEventListener("drop", async e => {
+  e.preventDefault(); ov.style.display = "none";
+  const file = e.dataTransfer.files[0]; if (!file) return;
+  const q = parseAdif(await file.text());
+  if (!q.length) { alert("No contacts found in that file. Is it an ADIF (.adi) export?"); return; }
+  QSOS = q; isSample = false;
+  try { localStorage.setItem("hamclock-qsos", JSON.stringify(q)); } catch (err) {}
+  drawQsos(); refreshQsoBlips();
+});
+
+// ---------- Weather ----------
+const WX = { 0:"Clear",1:"Mostly clear",2:"Partly cloudy",3:"Overcast",45:"Fog",48:"Fog",51:"Drizzle",53:"Drizzle",55:"Drizzle",61:"Light rain",63:"Rain",
+  65:"Heavy rain",66:"Freezing rain",67:"Freezing rain",71:"Light snow",73:"Snow",75:"Heavy snow",80:"Showers",81:"Showers",82:"Heavy showers",95:"Thunderstorms",96:"T-storms",99:"T-storms" };
+const compass = d => ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"][Math.round(d / 22.5) % 16];
+async function loadWeather() {
+  try {
+    const w = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${HOME.lat}&longitude=${HOME.lon}&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m` +
+      `&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=UTC&forecast_days=1`)).json();
+    const c = w.current, d = w.daily;
+    $("temp").innerHTML = `${Math.round(c.temperature_2m)}&deg;`;
+    $("cond").textContent = `${WX[c.weather_code] || ""} · ${compass(c.wind_direction_10m)} ${Math.round(c.wind_speed_10m)} mph`;
+    $("sun").textContent = `H ${Math.round(d.temperature_2m_max[0])}° L ${Math.round(d.temperature_2m_min[0])}° · ☀ ${localTime(new Date(d.sunrise[0] + "Z"))} ☾ ${localTime(new Date(d.sunset[0] + "Z"))}`;
+  } catch (e) { $("cond").textContent = "weather offline"; }
+  try {
+    const a = await (await fetch(`https://api.weather.gov/alerts/active?point=${HOME.lat},${HOME.lon}`)).json();
+    const list = [...new Set((a.features || []).map(f => f.properties.event))];
+    $("alert").style.display = list.length ? "block" : "none"; $("alert").textContent = list.length ? "⚠ " + list.join(" · ") : "";
+  } catch (e) {}
+}
+loadWeather(); setInterval(loadWeather, 15 * 60e3);
+
+// ---------- Space weather ----------
+const kpColor = k => k >= 5 ? "var(--bad)" : k >= 4 ? "var(--amber)" : "var(--good)";
+async function loadSpace() {
+  try {
+    const f = await (await fetch("https://services.swpc.noaa.gov/json/f107_cm_flux.json")).json(), v = Math.round(f[0].flux);
+    $("sfi").textContent = v; $("sfi").style.color = v >= 150 ? "var(--good)" : v >= 100 ? "var(--amber)" : "var(--ink)";
+    $("sfiX").textContent = v >= 150 ? "10m open" : v >= 100 ? "high bands ok" : "fair";
+  } catch (e) {}
+  try {
+    const k = await (await fetch("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json")).json();
+    const rows = k.map(r => Array.isArray(r) ? { kp: +r[1], a: +r[2] } : { kp: +r.Kp, a: +r.a_running }).filter(r => !isNaN(r.kp)), last = rows[rows.length - 1];
+    $("kp").textContent = last.kp.toFixed(1); $("kp").style.color = kpColor(last.kp); $("kpX").textContent = last.kp >= 5 ? "storm" : last.kp >= 4 ? "unsettled" : "quiet";
+    $("aidx").textContent = Math.round(last.a); $("aidx").style.color = last.a >= 30 ? "var(--bad)" : last.a >= 15 ? "var(--amber)" : "var(--good)";
+    $("aX").textContent = last.a >= 30 ? "disturbed" : last.a >= 15 ? "unsettled" : "settled";
+  } catch (e) {}
+  try {
+    const x = await (await fetch("https://services.swpc.noaa.gov/json/goes/primary/xrays-6-hour.json")).json();
+    const flux = x.filter(r => r.energy === "0.1-0.8nm").pop().flux;
+    const cls = flux >= 1e-4 ? "X" : flux >= 1e-5 ? "M" : flux >= 1e-6 ? "C" : flux >= 1e-7 ? "B" : "A";
+    $("xray").textContent = cls + (flux / { X: 1e-4, M: 1e-5, C: 1e-6, B: 1e-7, A: 1e-8 }[cls]).toFixed(1);
+    $("xray").style.color = cls === "X" ? "var(--bad)" : cls === "M" ? "var(--amber)" : "var(--ink)";
+    $("xrayX").textContent = cls === "X" || cls === "M" ? "FLARE" : "no flares";
+  } catch (e) {}
+}
+loadSpace(); setInterval(loadSpace, 15 * 60e3);
+
+// ---------- DX cluster (HamQTH) ----------
+const PLACES = { "alaska":[-150,63], "hawaii":[-157,20.6], "canary islands":[-15.5,28.3], "balearic islands":[3,39.6], "sardinia":[9,40], "sicily":[14,37.5],
+  "azores":[-28,38.5], "madeira islands":[-16.9,32.7], "european russia":[40,56], "asiatic russia":[100,60], "kaliningrad":[21,54.7], "england":[-1.5,52.5],
+  "scotland":[-4,56.8], "wales":[-3.7,52.3], "northern ireland":[-6.7,54.6], "puerto rico":[-66.5,18.2], "us virgin islands":[-64.8,18.3],
+  "bonaire":[-68.3,12.2], "curacao":[-69,12.2], "aruba":[-70,12.5], "martinique":[-61,14.6], "guadeloupe":[-61.5,16.2], "cayman islands":[-81.2,19.3],
+  "barbados":[-59.6,13.2], "bermuda":[-64.8,32.3], "crete":[24.9,35.2], "svalbard":[16,78], "faroe islands":[-7,62], "malta":[14.4,35.9],
+  "hong kong":[114.2,22.3], "singapore":[103.8,1.35], "maldives":[73.5,4.2], "mauritius":[57.5,-20.3], "reunion island":[55.5,-21.1], "cape verde":[-23.6,15.1],
+  "guam":[144.8,13.4], "french polynesia":[-149.5,-17.6], "bahrain":[50.6,26.1], "qatar":[51.2,25.3], "kuwait":[47.9,29.3], "united states":[-98,39],
+  "fed. rep. of germany":[10.4,51.1], "republic of korea":[127.8,36.4], "czech republic":[15.5,49.8], "slovak republic":[19.7,48.7],
+  "bosnia-herzegovina":[17.8,44.2], "dominican republic":[-70.4,18.8], "asiatic turkey":[35,39], "european turkey":[27.5,41.5], "bahamas":[-77.4,25],
+  "galapagos islands":[-90.5,-0.7], "falkland islands":[-59,-51.7], "antarctica":[0,-80], "st. lucia":[-61,13.9], "trinidad & tobago":[-61.3,10.5] };
+const norm = s => s.toLowerCase().replace(/[^a-z&. ]/g, "").trim();
+function spotPlace(country) {
+  const n = norm(country); if (PLACES[n]) return { lon: PLACES[n][0], lat: PLACES[n][1] };
+  const f = countries.find(c => { const m = norm(c.properties.name); return m === n || m.replace(" of america", "") === n; });
+  if (!f) return null; const c = d3.geoCentroid(f); return { lon: c[0], lat: c[1] };
+}
+let tickerHtml = "";
+async function loadSpots() {
+  try {
+    const txt = await (await fetch("https://www.hamqth.com/dxc_csv.php?limit=60")).text();
+    const spots = txt.trim().split("\n").map(l => l.split("^")).filter(p => p.length >= 10)
+      .map(([spotter, freq, dx, comment, td, , , cont, band, country]) => ({ freq: +freq, call: dx, time: td.slice(0, 4), band: band.toLowerCase(), country }));
+    const seen = new Set(); blips.spots = [];
+    for (const s of spots) {
+      if (seen.has(s.call)) continue; seen.add(s.call);
+      const p = spotPlace(s.country); if (!p) continue;
+      const b = blipXY(p); if (b) blips.spots.push({ ...s, ...b });
+      if (blips.spots.length >= 12) break;
+    }
+    const html = spots.slice(0, 25).map(s => `<span><b>${esc(s.call)}</b> <u>${s.freq.toFixed(1)}</u> ${esc(s.country)} · ${s.time}z</span>`).join("");
+    if (html !== tickerHtml) {
+      tickerHtml = html; const el = $("tick"); el.innerHTML = html + html;
+      el.getAnimations().forEach(a => a.cancel());
+      const w = el.scrollWidth / 2;
+      el.animate([{ transform: "translateX(0)" }, { transform: `translateX(-${w}px)` }], { duration: w * 14, iterations: Infinity });
+    }
+    $("dxDot").className = "livedot";
+  } catch (e) { $("dxDot").className = "livedot off"; }
+}
+setInterval(loadSpots, 90e3);
+
+// =====================================================================
+// RELAY (optional): logged contacts, QRZ confirmations, rig
+// =====================================================================
+// Served by the relay itself -> ask it directly; opened as a file -> use the relay setting (blank = no relay)
+const SERVED_BY_RELAY = location.protocol.startsWith("http") && location.port === "8088";
+const RELAY = SERVED_BY_RELAY ? "" : String(CFG.relay || "").trim().replace(/\/+$/, "");
+let lastId = -1, rigState = {}, logged = [];
+
+// --- fireworks (2D canvas over everything) ---
+const fx = $("fx"), fc = fx.getContext("2d"), sparks = [];
+const FX_COLORS = ["#ffb627", "#3ee6ff", "#c4f542", "#ffffff", "#f472b6", "#a78bfa", "#ff6b4a"];
+function burst(x, y, n = 140, colors = FX_COLORS) {
+  const col = colors[Math.floor(Math.random() * colors.length)];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, v = 2 + Math.random() * 7;
+    sparks.push({ x, y, px: x, py: y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, decay: .008 + Math.random() * .012,
+      color: Math.random() < .2 ? "#ffffff" : col });
+  }
+}
+let fireworksUntil = 0, fireworksAt = null;
+function drawFx() {
+  fc.clearRect(0, 0, 1920, 1080);
+  const now = performance.now();
+  if (now < fireworksUntil && Math.random() < .09) {
+    const at = fireworksAt && Math.random() < .45 ? fireworksAt : { x: 160 + Math.random() * 950, y: 140 + Math.random() * 520 };
+    burst(at.x + (Math.random() - .5) * 60, at.y + (Math.random() - .5) * 60);
+  }
+  fc.globalCompositeOperation = "lighter";
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const p = sparks[i];
+    p.px = p.x; p.py = p.y; p.vx *= .975; p.vy = p.vy * .975 + .09; p.x += p.vx; p.y += p.vy; p.life -= p.decay;
+    if (p.life <= 0) { sparks.splice(i, 1); continue; }
+    fc.strokeStyle = p.color; fc.globalAlpha = Math.min(1, p.life * 1.4); fc.lineWidth = 2.4;
+    fc.beginPath(); fc.moveTo(p.px - p.vx * 2, p.py - p.vy * 2); fc.lineTo(p.x, p.y); fc.stroke();
+  }
+  fc.globalAlpha = 1; fc.globalCompositeOperation = "source-over";
+}
+function screenOf(lat, lon) {
+  const v = ll2v(lat, lon, 1.01); if (!visible(v)) return null;
+  tmpV.copy(v).project(camera); return { x: (tmpV.x + 1) / 2 * 1920, y: (1 - tmpV.y) / 2 * 1080 };
+}
+
+// --- big takeovers, one at a time ---
+const showQueue = []; let showing = false;
+function queueShow(fn) { showQueue.push(fn); if (!showing) nextShow(); }
+function nextShow() {
+  const fn = showQueue.shift(); if (!fn) { showing = false; return; }
+  showing = true; fn(() => setTimeout(nextShow, 800));
+}
+function takeover({ k, n, c, cColor = "#fff", s, call = false, ms = 11000, at = null }, done) {
+  $("ceK").textContent = k; $("ceN").textContent = n; $("ceN").className = "n" + (call ? " call" : "");
+  $("ceC").textContent = c || ""; $("ceC").style.color = cColor; $("ceS").textContent = s || "";
+  const el = $("celebrate");
+  el.animate([{ opacity: 0, transform: "scale(.9)" }, { opacity: 1, transform: "scale(1)", offset: .07 }, { opacity: 1, offset: .9 }, { opacity: 0, transform: "scale(1.04)" }],
+    { duration: ms, easing: "ease-out" });
+  fireworksUntil = performance.now() + ms * .85; fireworksAt = at;
+  for (let i = 0; i < 4; i++) setTimeout(() => burst(250 + Math.random() * 770, 200 + Math.random() * 400), i * 250);
+  setTimeout(done, ms);
+}
+
+// --- small pop-ups, one at a time ---
+const toastQueue = []; let toasting = false;
+function toast(html, color, ms = 6500) {
+  toastQueue.push({ html, color, ms }); if (!toasting) nextToast();
+}
+function nextToast() {
+  const t = toastQueue.shift(); if (!t) { toasting = false; return; }
+  toasting = true; const el = $("toast");
+  el.innerHTML = t.html; el.style.borderColor = t.color; el.style.boxShadow = `0 0 30px ${t.color}55, 0 10px 40px rgba(0,0,0,.6)`;
+  el.animate([{ opacity: 0, transform: "translate(-50%, -16px)" }, { opacity: 1, transform: "translate(-50%, 0)", offset: .08 }, { opacity: 1, offset: .88 }, { opacity: 0 }],
+    { duration: t.ms, easing: "ease-out" });
+  setTimeout(() => nextToast(), t.ms + 300);
+}
+function focusOn(lat, lon, secs = 14) { if (!camFree()) return; cam.focus = { lon, lat: Math.max(-10, Math.min(50, lat)) }; cam.focusUntil = performance.now() / 1000 + secs; }
+
+function handleEvent(e) {
+  if (e.type === "qso") {
+    const mi = e.lat != null ? Math.round(miles(HOME, e)) : null;
+    if (e.lat != null) {
+      const col = new THREE.Color(bandColor(e.band));
+      addFatArc(HOME, { lat: e.lat, lon: e.lon }, "qso:" + e.call, 1200, { core: col.clone().lerp(new THREE.Color(0xffffff), .6).getHex(), glowHex: col.getHex() });
+      logged = [{ ...e, b: blipXY(e), t: Date.now() }, ...logged.filter(q => q.call !== e.call)].slice(0, 20);
+    }
+    toast(`<span class="tk" style="color:${bandColor(e.band)}">✎ LOGGED · ${esc(e.src || "")}</span><b>${esc(e.call)}</b> <span>· ${esc(e.band)} ${esc(e.mode)}${e.where ? " · " + esc(e.where) : ""}${mi ? " · " + mi.toLocaleString() + " mi" : ""}</span>`,
+      bandColor(e.band));
+  } else if (e.type === "confirm") {
+    if (e.newCountry) {
+      queueShow(done => {
+        if (e.lat != null) focusOn(e.lat, e.lon, 9);
+        takeover({ k: "✅ NEW COUNTRY CONFIRMED", n: e.where || e.call, c: `${e.call} · ${e.band} ${e.mode}`, cColor: "#4ade80", ms: 8000 }, done);
+        setTimeout(() => { if (e.lat != null) { const p = screenOf(e.lat, e.lon); if (p) fireworksAt = p; } }, 2000);
+      });
+    } else {
+      toast(`<span class="tk" style="color:#4ade80">✅ CONFIRMED</span><b>${esc(e.call)}</b> <span>· ${esc(e.where || "")} · ${esc(e.band)} ${esc(e.mode)}</span>`, "#4ade80");
+      if (e.lat != null) { const p = screenOf(e.lat, e.lon); if (p) burst(p.x, p.y, 70, ["#4ade80", "#ffffff"]); }
+    }
+  }
+}
+
+function showRig(r) {
+  rigState = r || {};
+  const card = $("rigCard"), on = !!(r && r.freq);
+  card.classList.toggle("off", !on);
+  $("onAir").classList.toggle("tx", !!(on && r.tx));
+  if (!on) { $("rigFreq").innerHTML = "&mdash;.&mdash;&mdash;&mdash;<span>.&mdash;&mdash;&mdash;</span>"; $("rigMode").textContent = "RIG OFF"; $("rigSrc").textContent = "waiting for WSJT-X"; return; }
+  const hz = String(Math.round(r.freq)).padStart(7, "0"), mhz = hz.slice(0, -6), khz = hz.slice(-6, -3), h = hz.slice(-3);
+  $("rigFreq").innerHTML = `${mhz}.${khz}<span>.${h}</span>`;
+  $("rigMode").textContent = `${r.mode || ""} · ${r.band || ""}${r.tx && r.dx ? " · calling " + r.dx : ""}`;
+  $("rigSrc").textContent = r.src || "";
+}
+async function pollRelay() {
+  if (!SERVED_BY_RELAY && !RELAY) { showRig(null); $("rigSrc").textContent = "no relay set up"; return; }
+  try {
+    const d = await (await fetch(`${RELAY}/events?after=${lastId}`, { cache: "no-store" })).json();
+    if (lastId >= 0) d.events.forEach(handleEvent);
+    lastId = d.last; showRig(d.rig);
+  } catch (e) { showRig(null); $("rigSrc").textContent = "relay offline"; }
+}
+pollRelay(); setInterval(pollRelay, 4000);
+
+// Press T on the keyboard to preview every kind of pop-up without waiting for real ones
+const DEMO = [
+  { type: "qso", call: "JA1XYZ", band: "20m", mode: "SSB", src: "QRZ", lat: 35.7, lon: 139.7, where: "Japan" },
+  { type: "confirm", call: "G4ABC", band: "40m", mode: "FT8", where: "England", newCountry: false, lat: 51.5, lon: -.1 },
+  { type: "confirm", call: "ZS6ABC", band: "15m", mode: "FT8", where: "South Africa", newCountry: true, lat: -26.2, lon: 28 },
+];
+// ---------- Station setup screen ----------
+const setupEl = $("setup"), sf = $("setupForm"), firstRun = !SAVED && SETTINGS.call === "N0CALL";
+(() => {
+  let zones = [];
+  try { zones = Intl.supportedValuesOf("timeZone"); } catch (e) {}
+  const mine = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  for (const z of new Set([...zones, CFG.tz, mine].filter(Boolean))) sf.tz.add(new Option(z.replace(/_/g, " "), z));
+})();
+function openSetup() {
+  sf.call.value = firstRun ? "" : HOME.call;
+  sf.lat.value = firstRun ? "" : HOME.lat; sf.lon.value = firstRun ? "" : HOME.lon;
+  sf.grid.value = firstRun ? "" : gridOf(HOME.lat, HOME.lon).slice(0, 6);
+  sf.town.value = firstRun ? "" : HOME.name; sf.relay.value = CFG.relay || "";
+  sf.tz.value = firstRun ? Intl.DateTimeFormat().resolvedOptions().timeZone : CFG.tz;
+  $("setupCancel").style.display = firstRun ? "none" : "";
+  $("setupErr").textContent = "";
+  setupEl.classList.add("open"); sf.call.focus();
+}
+const closeSetup = () => setupEl.classList.remove("open");
+sf.grid.addEventListener("input", () => {
+  const g = gridToLatLon(sf.grid.value);
+  if (g && sf.grid.value.trim().length >= 4) { sf.lat.value = g.lat.toFixed(4); sf.lon.value = g.lon.toFixed(4); }
+});
+const syncGrid = () => { const la = parseFloat(sf.lat.value), lo = parseFloat(sf.lon.value);
+  if (Math.abs(la) <= 90 && Math.abs(lo) <= 180) sf.grid.value = gridOf(la, lo).slice(0, 6); };
+sf.lat.addEventListener("change", syncGrid); sf.lon.addEventListener("change", syncGrid);
+sf.addEventListener("submit", e => {
+  e.preventDefault();
+  const call = sf.call.value.trim().toUpperCase(), lat = parseFloat(sf.lat.value), lon = parseFloat(sf.lon.value);
+  let relay = sf.relay.value.trim();
+  if (relay && !/^https?:\/\//i.test(relay)) relay = "http://" + relay;
+  const err = !/^[A-Z0-9\/]{3,12}$/.test(call) ? "Enter your call sign."
+    : !(Math.abs(lat) <= 90 && Math.abs(lon) <= 180) ? "Enter a grid square, or your latitude and longitude." : "";
+  if (err) { $("setupErr").textContent = err; return; }
+  const town = sf.town.value.trim() || "HOME";
+  try { localStorage.setItem("hamclock-settings", JSON.stringify({ call, lat, lon, town, tz: sf.tz.value, relay })); }
+  catch (e2) { $("setupErr").textContent = "This browser won't save settings (private window?). Edit SETTINGS in index.html instead."; return; }
+  location.reload();   // everything (radar, PSKReporter filter, passes) is built from these at start-up
+});
+$("setupCancel").addEventListener("click", closeSetup);
+$("setupBtn").addEventListener("click", () => { $("setupBtn").blur(); openSetup(); });
+if (firstRun) openSetup();
+
+addEventListener("keydown", e => {
+  if (setupEl.classList.contains("open")) { if (e.key === "Escape" && !firstRun) closeSetup(); return; }
+  if (e.target.closest && e.target.closest("input, select, textarea")) return;
+  if (e.key === "s" || e.key === "S") { e.preventDefault(); openSetup(); return; }
+  if (e.code === "Space") { e.preventDefault(); toggleSpin(); }
+  if (e.key === "t" || e.key === "T") DEMO.forEach(handleEvent);
+  if (e.key === "r" || e.key === "R") showRig(rigState.freq ? {} : { src: "WSJT-X", freq: 7074000, mode: "FT8", band: "40m", tx: true, dx: "CQ" });
+});
+
+// =====================================================================
+// RENDER LOOP
+// =====================================================================
+let last = performance.now() / 1000;
+function frame() {
+  const t = performance.now() / 1000, dt = Math.min(.1, t - last); last = t;
+  updateCamera(t, dt);
+  clouds.rotation.y += dt * .004;
+  const k = (t % 2.4) / 2.4; homeRing.scale.setScalar(.01 + k * .07); homeRing.material.opacity = (1 - k) * .9;
+  homeCore.scale.setScalar(.06 + Math.sin(t * 3) * .012);
+  updateArcs(t);
+  renderer.render(scene, camera);
+  updateLabels();
+  drawRadar(t);
+  drawFx();
+  requestAnimationFrame(frame);
+}
+frame();
+window.__mc = { cam, arcs, get heard() { return heard; }, onHeard, handleEvent, showRig };   // onHeard lets you test beams from the console   // handy for checking from the browser console
+</script>
+</body>
+</html>
