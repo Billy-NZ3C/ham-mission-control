@@ -1,0 +1,6 @@
+# Your own settings and saved state - never upload these
+relay/relay.ini
+relay/qrz-state.json
+relay/www/
+__pycache__/
+.DS_Store
