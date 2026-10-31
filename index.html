@@ -149,6 +149,7 @@ html, body { width: 100%; height: 100%; background: #000; color: var(--ink); ove
 .chip { position: absolute; font: 700 12px var(--mono); letter-spacing: .18em; color: var(--dim); opacity: .6;
   background: rgba(3,8,14,.55); border: 1px solid var(--line); border-radius: 18px; padding: 8px 14px; cursor: pointer; }
 .chip:hover { opacity: 1; color: var(--ink); } .chip.on { opacity: 1; color: var(--amber); border-color: rgba(255,182,39,.5); }
+.embed #spinBtn, .embed #setupBtn, .embed #rigCard, .embed #dropOverlay { display: none !important; }
 #spinBtn { right: 676px; top: 380px; } #setupBtn { right: 676px; top: 426px; }
 
 /* Station setup screen (first run, the SETUP button or the S key) */
@@ -257,9 +258,18 @@ const SETTINGS = {
 };
 // =====================================================================
 
+// Website mode: index.html?embed=1&call=NZ3C&grid=FM15aj&town=GOLDSBORO%20NC&tz=America/New_York (or lat= & lon=)
+// shows the clock in a frame on a web page: locked to those details, with no setup screen, buttons, keys,
+// drag-drop, relay or sample logbook contacts, and a lighter worldwide feed. Visitors can still drag the globe.
+const URLP = new URLSearchParams(location.search), EMBED = URLP.has("embed");
+const FROM_URL = {};
+for (const k of ["call", "town", "tz"]) if (URLP.get(k)) FROM_URL[k] = URLP.get(k);
+if (URLP.get("lat") && URLP.get("lon")) { FROM_URL.lat = +URLP.get("lat"); FROM_URL.lon = +URLP.get("lon"); }
+else if (URLP.get("grid")) { const g = gridToLatLon(URLP.get("grid")); if (g) { FROM_URL.lat = g.lat; FROM_URL.lon = g.lon; } }
+if (EMBED) document.documentElement.classList.add("embed");
 let SAVED = null;
-try { SAVED = JSON.parse(localStorage.getItem("hamclock-settings") || "null"); } catch (e) {}
-const CFG = { ...SETTINGS, ...(SAVED || {}) };
+if (!EMBED) try { SAVED = JSON.parse(localStorage.getItem("hamclock-settings") || "null"); } catch (e) {}
+const CFG = { ...SETTINGS, ...(SAVED || {}), ...FROM_URL };
 const HOME = { lat: +CFG.lat, lon: +CFG.lon, name: String(CFG.town || "").toUpperCase(), tz: CFG.tz, call: String(CFG.call).toUpperCase() };
 const SATS = { "ISS (ZARYA)": "ISS", "SAUDISAT 1C (SO-50)": "SO-50", "OSCAR 7 (AO-7)": "AO-7", "RS-44 & BREEZE-KM R/B": "RS-44",
   "GREENCUBE (IO-117)": "IO-117", "JAS-2 (FO-29)": "FO-29", "FUNCUBE-1 (AO-73)": "AO-73", "RADFXSAT (FOX-1B)": "AO-91",
@@ -444,8 +454,8 @@ const homeRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x
 homeRing.position.copy(ll2v(HOME.lat, HOME.lon, 1.003)); homeRing.lookAt(homeRing.position.clone().multiplyScalar(2)); homeGroup.add(homeRing);
 
 // ---------- Logbook contacts: light pillars ----------
-let QSOS = SAMPLE, isSample = true;
-try { const s = JSON.parse(localStorage.getItem("hamclock-qsos") || "null"); if (Array.isArray(s) && s.length) { QSOS = s; isSample = false; } } catch (e) {}
+let QSOS = EMBED ? [] : SAMPLE, isSample = !EMBED;   // a web page shows no made-up contacts
+if (!EMBED) try { const s = JSON.parse(localStorage.getItem("hamclock-qsos") || "null"); if (Array.isArray(s) && s.length) { QSOS = s; isSample = false; } } catch (e) {}
 const qsoGroup = new THREE.Group(); scene.add(qsoGroup);
 function drawQsos() {
   qsoGroup.clear();
@@ -835,7 +845,7 @@ function startPsk() {
     const client = mqtt.connect("wss://mqtt.pskreporter.info:1886/mqtt", { reconnectPeriod: 8000, connectTimeout: 15000 });
     client.on("connect", () => {
       $("pskDot").className = "livedot"; $("pskNote").textContent = "live from PSKReporter";
-      client.subscribe(["pskr/filter/v2/+/+/" + HOME.call + "/#", "pskr/filter/v2/+/FT8/#", "pskr/filter/v2/+/CW/#"]);
+      client.subscribe(["pskr/filter/v2/+/+/" + HOME.call + "/#", "pskr/filter/v2/+/FT8/#"].concat(EMBED ? [] : ["pskr/filter/v2/+/CW/#"]));
     });
     client.on("message", (topic, payload) => onSpot(topic, payload.toString()));
     client.on("close", () => { $("pskDot").className = "livedot off"; $("pskNote").textContent = "reconnecting…"; });
@@ -844,7 +854,7 @@ function startPsk() {
 startPsk();
 // Draw a few worldwide signals per second, preferring long hauls (they look best)
 setInterval(() => {
-  if (!spotQueue.length || arcs.length > 160) return;
+  if (!spotQueue.length || arcs.length > (EMBED ? 90 : 160)) return;
   let best = null, bestD = 0;
   for (let i = 0; i < 6 && spotQueue.length; i++) {
     const m = spotQueue.splice(Math.floor(Math.random() * spotQueue.length), 1)[0];
@@ -883,7 +893,7 @@ function parseAdif(text) {
   return out;
 }
 const ov = $("dropOverlay");
-addEventListener("dragover", e => { e.preventDefault(); ov.style.display = "flex"; });
+addEventListener("dragover", e => { if (EMBED) return; e.preventDefault(); ov.style.display = "flex"; });
 addEventListener("dragleave", e => { if (!e.relatedTarget) ov.style.display = "none"; });
 addEventListener("drop", async e => {
   e.preventDefault(); ov.style.display = "none";
@@ -989,7 +999,7 @@ setInterval(loadSpots, 90e3);
 // =====================================================================
 // Served by the relay itself -> ask it directly; opened as a file -> use the relay setting (blank = no relay)
 const SERVED_BY_RELAY = location.protocol.startsWith("http") && location.port === "8088";
-const RELAY = SERVED_BY_RELAY ? "" : String(CFG.relay || "").trim().replace(/\/+$/, "");
+const RELAY = EMBED || SERVED_BY_RELAY ? "" : String(CFG.relay || "").trim().replace(/\/+$/, "");
 let lastId = -1, rigState = {}, logged = [];
 
 // --- fireworks (2D canvas over everything) ---
@@ -1095,6 +1105,7 @@ function showRig(r) {
   $("rigSrc").textContent = r.src || "";
 }
 async function pollRelay() {
+  if (EMBED) return;
   if (!SERVED_BY_RELAY && !RELAY) { showRig(null); $("rigSrc").textContent = "no relay set up"; return; }
   try {
     const d = await (await fetch(`${RELAY}/events?after=${lastId}`, { cache: "no-store" })).json();
@@ -1111,7 +1122,7 @@ const DEMO = [
   { type: "confirm", call: "ZS6ABC", band: "15m", mode: "FT8", where: "South Africa", newCountry: true, lat: -26.2, lon: 28 },
 ];
 // ---------- Station setup screen ----------
-const setupEl = $("setup"), sf = $("setupForm"), firstRun = !SAVED && SETTINGS.call === "N0CALL";
+const setupEl = $("setup"), sf = $("setupForm"), firstRun = !EMBED && !SAVED && !FROM_URL.call && SETTINGS.call === "N0CALL";
 (() => {
   let zones = [];
   try { zones = Intl.supportedValuesOf("timeZone"); } catch (e) {}
@@ -1154,6 +1165,7 @@ $("setupBtn").addEventListener("click", () => { $("setupBtn").blur(); openSetup(
 if (firstRun) openSetup();
 
 addEventListener("keydown", e => {
+  if (EMBED) return;
   if (setupEl.classList.contains("open")) { if (e.key === "Escape" && !firstRun) closeSetup(); return; }
   if (e.target.closest && e.target.closest("input, select, textarea")) return;
   if (e.key === "s" || e.key === "S") { e.preventDefault(); openSetup(); return; }

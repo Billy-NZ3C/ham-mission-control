@@ -181,6 +181,26 @@ To get out of full screen, press **Alt+F4**.
 
 ---
 
+## Put the clock on your website
+
+The clock has a **website mode** for showing it inside a page (an iframe). It's locked to the call and
+location in the link: no setup screen, buttons, keyboard shortcuts or relay, and a lighter worldwide feed.
+Visitors can still drag the globe.
+
+```
+https://billy-nz3c.github.io/ham-mission-control/?embed=1&call=N0CALL&grid=EM28&town=LEBANON%20KS&tz=America/Chicago
+```
+
+Change `call`, `grid` (or use `lat=` and `lon=` instead), `town` (spaces become `%20`) and `tz`.
+On your page:
+
+```html
+<div style="aspect-ratio:16/9"><iframe src="(the link above)" style="width:100%;height:100%;border:0" allow="fullscreen"></iframe></div>
+```
+
+The 3D globe is heavy for phones, so on small screens it's kinder to show `poster.jpg` with a link that opens
+the clock full screen.
+
 ## Notes
 
 - **Weather alerts** come from the US National Weather Service, so they only appear in the US.
